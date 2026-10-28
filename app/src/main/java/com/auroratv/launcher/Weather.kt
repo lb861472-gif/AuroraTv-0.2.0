@@ -109,17 +109,18 @@ object Weather {
         if (text == null) return null
         return try {
             val arr = JSONObject(text).optJSONArray("results") ?: return null
-            var pick: JSONObject? = null
+            var found: JSONObject? = null
             for (i in 0 until arr.length()) {
                 val r = arr.getJSONObject(i)
                 val hay = (r.optString("name") + " " + r.optString("admin1") + " " + r.optString("country")).lowercase()
                 if (extra.all { hay.contains(it) }) {
-                    pick = r
+                    found = r
                     break
                 }
             }
-            if (pick == null) pick = arr.getJSONObject(0)
-            val label = pick.optString("name") + (if (pick.optString("admin1").isNotEmpty()) ", " + pick.optString("admin1") else "")
+            val pick: JSONObject = found ?: arr.getJSONObject(0)
+            val admin = pick.optString("admin1")
+            val label = pick.optString("name") + (if (admin.isNotEmpty()) ", " + admin else "")
             Place(pick.getDouble("latitude").toString(), pick.getDouble("longitude").toString(), label)
         } catch (e: Exception) {
             null
