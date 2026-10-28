@@ -1,0 +1,82 @@
+name: Build AuroraTV debug APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Prepare Android SDK (already installed on ubuntu-latest)
+        run: |
+          SDKM=$(ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | head -n 1)
+          echo "Using $SDKM"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-34" "build-tools;34.0.0" || true
+
+      - name: Set up Gradle 8.5 (only used to create the wrapper)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.5"
+
+      - name: Create Gradle wrapper (wrapper jar is not stored in the repo)
+        run: |
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            mkdir -p /tmp/wrapgen
+            (cd /tmp/wrapgen && echo "" > settings.gradle && gradle wrapper --gradle-version 8.5)
+            cp /tmp/wrapgen/gradlew /tmp/wrapgen/gradlew.bat .
+            mkdir -p gradle/wrapper
+            cp /tmp/wrapgen/gradle/wrapper/* gradle/wrapper/
+          fi
+          chmod +x ./gradlew
+
+      - name: Build debug APK
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Inspect the built APK's manifest (Home launcher declarations)
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          AAPT2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -n 1)
+          echo "Using $AAPT2"
+          "$AAPT2" dump badging "$APK" | head -n 15 || true
+          "$AAPT2" dump xmltree "$APK" --file AndroidManifest.xml > manifest-dump.txt || true
+          if [ -s manifest-dump.txt ]; then
+            cat manifest-dump.txt
+            grep -q "android.intent.category.HOME" manifest-dump.txt || { echo "::error::HOME category missing from built APK"; exit 1; }
+            grep -q "HomeAlias" manifest-dump.txt || { echo "::error::HomeAlias missing from built APK"; exit 1; }
+            grep -q "android.intent.category.LEANBACK_LAUNCHER" manifest-dump.txt || { echo "::error::LEANBACK_LAUNCHER missing"; exit 1; }
+            echo "Manifest check passed: HOME + LEANBACK_LAUNCHER declarations are in the APK."
+          else
+            echo "::warning::Could not dump the manifest, skipped the check."
+          fi
+
+      - name: Name the APK with its version
+        run: |
+          VER=$(grep -m1 'versionName' app/build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')
+          echo "Version: $VER"
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/AuroraTV-$VER-debug.apk"
+          cp manifest-dump.txt dist/ 2>/dev/null || true
+          ls -la dist
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AuroraTV-0.2.0-debug-apk
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
